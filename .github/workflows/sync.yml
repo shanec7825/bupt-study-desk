@@ -1,0 +1,113 @@
+name: Sync BUPT to Google
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "site/**"
+      - "scripts/**"
+      - ".github/workflows/sync.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "site/**"
+      - "scripts/**"
+      - ".github/workflows/sync.yml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only fetch BUPT data; do not write Google events/tasks"
+        type: boolean
+        default: true
+  schedule:
+    # 06:17 and 18:17 Beijing time (UTC+8); GitHub schedules may be delayed.
+    - cron: "17 10,22 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bupt-calendar-sync
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Check imports and syntax
+        run: deno check src/sync.mjs
+      - name: Test and build the dashboard
+        run: node site/scripts/test.mjs && npm --prefix site run build && npm --prefix site run validate
+      - name: Test normalization without school credentials
+        run: deno test tests/
+
+  sync:
+    needs: tests
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.ENABLE_SCHEDULED_SYNC == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Fetch BUPT and sync Google
+        id: sync
+        env:
+          BUPT_USER: ${{ secrets.BUPT_USER }}
+          BUPT_PASSWORD: ${{ secrets.BUPT_PASSWORD }}
+          BUPT_JWGL_PASSWORD: ${{ secrets.BUPT_JWGL_PASSWORD }}
+          BUPT_OCR_TOKEN: ${{ secrets.BUPT_OCR_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          BUPT_SITE_ORIGIN: ${{ vars.BUPT_SITE_ORIGIN }}
+          BUPT_SITE_SERVICE_TOKEN: ${{ secrets.BUPT_SITE_SERVICE_TOKEN }}
+          BUPT_SITE_INGEST_SECRET: ${{ secrets.BUPT_SITE_INGEST_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: deno run --allow-env --allow-net --allow-run=python3 src/sync.mjs
+
+      - name: 手机端同步状态
+        if: ${{ always() }}
+        env:
+          SYNC_OUTCOME: ${{ steps.sync.outcome }}
+          SYNC_EVENT: ${{ github.event_name }}
+          SYNC_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+          SYNC_HISTORY: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/sync.yml
+        shell: bash
+        run: |
+          case "$SYNC_OUTCOME" in
+            success) result='🟢 成功' ;;
+            failure) result='🔴 失败' ;;
+            cancelled) result='⚪ 已取消' ;;
+            *) result='⚪ 未运行' ;;
+          esac
+          if [[ "$SYNC_EVENT" == schedule ]]; then
+            mode='定时同步'
+          elif [[ "$SYNC_DRY_RUN" == true ]]; then
+            mode='手动只读检查（不写日历）'
+          else
+            mode='手动同步'
+          fi
+          if [[ "$SYNC_OUTCOME" == success && "$SYNC_DRY_RUN" != true ]]; then
+            freshness='本次已完成写入。'
+          elif [[ "$SYNC_OUTCOME" == success ]]; then
+            freshness='本次只读检查成功，没有更新日历或 Tasks。'
+          else
+            freshness='本次未确认完整同步；最新截止时间请以教学云为准。'
+          fi
+          {
+            printf '# 北邮同步状态\n\n'
+            printf '**%s · %s**\n\n' "$result" "$mode"
+            printf '检查完成时间（北京时间）：%s\n\n' "$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+            printf '%s\n\n' "$freshness"
+            printf '[查看运行历史](%s) · [打开教学云](https://ucloud.bupt.edu.cn/)\n' "$SYNC_HISTORY"
+          } >> "$GITHUB_STEP_SUMMARY"
+

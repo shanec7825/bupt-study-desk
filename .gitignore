@@ -1,0 +1,60 @@
+# --- dependencies ---
+node_modules/
+**/node_modules/
+venv/
+.venv/
+env/
+.conda/
+
+# --- secrets / local env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# --- caches ---
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.ipynb_checkpoints/
+
+# --- build artifacts / outputs ---
+dist/
+build/
+target/
+out/
+release/
+releases/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# --- weights / databases / logs ---
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+*.bak
+
+# --- OS / editor ---
+Thumbs.db
+.DS_Store
+.idea/
+
+/site/.openai/hosting.json
